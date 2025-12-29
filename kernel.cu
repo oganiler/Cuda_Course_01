@@ -94,7 +94,7 @@ int main()
 
 	//--------------------------- calculate occupancy ---------------------------
     int numBlocks;        // Occupancy in terms of active blocks
-    int blockSize = 256;
+    int blockSize = N;
 
     // These variables are used to convert occupancy to warps
     int device;
@@ -124,6 +124,8 @@ int main()
     std::cout << "numBlocks * blockSize: " << numBlocks * blockSize << std::endl;
     std::cout << "activeWarps: " << activeWarps << " (numBlocks * blockSize / prop.warpSize)" << std::endl;
     std::cout << "Occupancy: " << (double)activeWarps / maxWarps * 100 << "%" << " (activeWarps / maxWarps)" << std::endl;
+
+    basic_gpu_increment_kernel << <numBlocks, blockSize >> > ((int*)gpu_p);
     //--------------------------- calculate occupancy ---------------------------
 
 	cudaError_t result = cudaDeviceSynchronize();
