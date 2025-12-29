@@ -4,9 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
-//#include "device_info.h"
+#include "device_info.h"
 
-const int N = 1024;
+const int N = 128;
 const int ARRAY_BYTES_INT = N * sizeof(int);//allocation size
 
 void* cpu_p;
@@ -78,14 +78,53 @@ void print_cpu_numbers()
 
 int main()
 {
-    //PrintCudaDeviceInfo();
+    PrintCudaDeviceInfo();
 
 	cpu_alloc();
 	cpu_set_numbers();
 
 	gpu_alloc();
 	cpu_memory_to_gpu_memory();
-	basic_gpu_increment_kernel <<<1, N >>> ((int*)gpu_p);
+
+    //On current GPUs, a thread block may contain up to 1024 threads.
+    // 		dim3 threadsPerBlock(16, 16); // A thread block size of 16x16 (256 threads), although arbitrary in this case, is a common choice
+    //      dim3 numBlocks(N / threadsPerBlock.x, N / threadsPerBlock.y);
+    //cluster_kernel<<<numBlocks, threadsPerBlock>>>(input, output);
+	//basic_gpu_increment_kernel <<<2, N >>> ((int*)gpu_p);
+
+	//--------------------------- calculate occupancy ---------------------------
+    int numBlocks;        // Occupancy in terms of active blocks
+    int blockSize = 256;
+
+    // These variables are used to convert occupancy to warps
+    int device;
+    cudaDeviceProp prop;
+    int activeWarps;
+    int maxWarps;
+
+    cudaGetDevice(&device);
+    cudaGetDeviceProperties(&prop, device);
+
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &numBlocks,
+        basic_gpu_increment_kernel,
+        blockSize,
+        0);
+
+    activeWarps = numBlocks * blockSize / prop.warpSize;
+    maxWarps = prop.maxThreadsPerMultiProcessor / prop.warpSize;
+
+    std::cout << "N: " << N << std::endl;
+    std::cout << "blockSize (threadsPerBlock given): " << blockSize << std::endl;
+    std::cout << "numBlocks (calculated): " << numBlocks << std::endl;
+    std::cout << "warpSize: " << prop.warpSize << std::endl;
+    std::cout << "maxThreadsPerMultiProcessor: " << prop.maxThreadsPerMultiProcessor << std::endl;
+    std::cout << "maxWarps: " << maxWarps << " (prop.maxThreadsPerMultiProcessor / prop.warpSize)" << std::endl;
+
+    std::cout << "numBlocks * blockSize: " << numBlocks * blockSize << std::endl;
+    std::cout << "activeWarps: " << activeWarps << " (numBlocks * blockSize / prop.warpSize)" << std::endl;
+    std::cout << "Occupancy: " << (double)activeWarps / maxWarps * 100 << "%" << " (activeWarps / maxWarps)" << std::endl;
+    //--------------------------- calculate occupancy ---------------------------
 
 	cudaError_t result = cudaDeviceSynchronize();
 	assert(result == cudaSuccess);

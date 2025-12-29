@@ -71,11 +71,12 @@ void PrintCudaDeviceInfo()
         //std::cout << "SM clock: " << (p.clockRate / 1000) << " MHz\n";
         //std::cout << "Memory clock: " << (p.memoryClockRate / 1000) << " MHz\n";
         std::cout << "Memory bus width: " << p.memoryBusWidth << " bits\n";
+        std::cout << "major: " << p.major << " minor:" << p.minor << std::endl;
 
         int cores_sm = fp32_cores_per_sm(p.major, p.minor);
         if (cores_sm > 0) {
             long long est_cuda_cores = 1LL * p.multiProcessorCount * cores_sm;
-            std::cout << "Estimated 'CUDA cores' (SM * FP32/SM): " << est_cuda_cores
+            std::cout << "Estimated 'CUDA cores' (SM * FP32/SM): " << p.multiProcessorCount  << " X " << cores_sm << " = " << est_cuda_cores
                 << "  (heuristic)\n";
         }
         else {
