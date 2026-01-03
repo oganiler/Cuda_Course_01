@@ -7,7 +7,7 @@
 #include <cstdio>
 #include "device_info.h"
 
-const int N = 64;
+const int N = 128 * 1024;
 const int ARRAY_BYTES_INT = N * sizeof(int);//allocation size
 
 void* cpu_p;
@@ -67,25 +67,30 @@ __global__ void basic_gpu_increment_kernel_1B(int* g_data)
     int idx = threadIdx.x;
     unsigned int current_thrednum = atomicAdd(&thrednum, 1);
 
-    if (threadIdx.x == 0) {
-        printf("blockIdx=%d  gridDim=%d  blockDim=%d\n",
-            blockIdx.x, gridDim.x, blockDim.x);
-    }
+    //if (threadIdx.x == 0) {
+    //    printf("blockIdx=%d  gridDim=%d  blockDim=%d\n",
+    //        blockIdx.x, gridDim.x, blockDim.x);
+    //}
 
     if (idx < N)
     {
         unsigned int current_launchnum = atomicAdd(&launchnum, 1);
-        printf("launchnum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d thrednum=%u\n",
-            current_launchnum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, current_thrednum);
 
         //launch
+        int current_data = g_data[idx];
         g_data[idx] *= 2;
+        int current_updated_data = g_data[idx];
+
+        //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d thrednum=%u|\n",
+        //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, current_thrednum);
     }
 
     //printf("thrednum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d\n",
     //    current_thrednum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x);
 }
 
+// So it can only update all elements if:gridDim.x * blockDim.x >= N when cudaOccupancyMaxActiveBlocksPerMultiprocessor is not used
+// optionally "int numBlocksNeeded = (N + blockSize - 1) / blockSize" can be used to calculate the number of blocks needed without stride (simply N / blockSize if N is divisible by blockSize)
 __global__ void basic_gpu_increment_kernel_MB(int* g_data, int N)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -93,17 +98,24 @@ __global__ void basic_gpu_increment_kernel_MB(int* g_data, int N)
     unsigned int current_thrednum = atomicAdd(&thrednum, 1);
 
     if (threadIdx.x == 0) {
-        printf("blockIdx=%d  gridDim=%d  blockDim=%d\n",
-            blockIdx.x, gridDim.x, blockDim.x);
+        printf("blockIdx=%d  gridDim=%d  blockDim=%d N=%d gridDim.x * blockDim.x = %d\n",
+            blockIdx.x, gridDim.x, blockDim.x, N, gridDim.x * blockDim.x);
     }
+
+    //if (blockIdx.x == 0 && threadIdx.x == 16) {
+    //    printf("");
+    //}
 
     if (idx < N) {
         unsigned int current_launchnum = atomicAdd(&launchnum, 1);
-        printf("launchnum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d thrednum=%u\n",
-            current_launchnum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, current_thrednum);
 
         //launch
+        int current_data = g_data[idx];
         g_data[idx] *= 2;
+        int current_updated_data = g_data[idx];
+
+        //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d thrednum=%u|\n",
+        //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, current_thrednum);
     }
 
     //printf("thrednum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d\n",
@@ -122,28 +134,86 @@ __global__ void basic_gpu_increment_kernel_stride(int* g_data, int N)
             blockIdx.x, gridDim.x, blockDim.x);
     }
 
-    unsigned int current_thrednum = atomicAdd(&thrednum, 1);
+    unsigned int current_thrednum = atomicAdd(&thrednum, 1) + 1;
 
     for (; idx < N; idx += stride) {
-        unsigned int current_launchnum = atomicAdd(&launchnum, 1);
-        printf("launchnum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d stride=%d thrednum=%u\n",
-            current_launchnum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, stride, current_thrednum);
+        unsigned int current_launchnum = atomicAdd(&launchnum, 1) + 1;
 
         //launch
+        int current_data = g_data[idx];
         g_data[idx] *= 2;
+		int current_updated_data = g_data[idx];
+
+        //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d stride=%d thrednum=%u|\n",
+        //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, stride, current_thrednum);
     }
 
     //printf("thrednum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d\n",
     //    current_thrednum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x);
 }
 
-void print_cpu_numbers()
+void print_cpu_numbers(bool all_elements, bool between, int firstN_element, int lastN_element)
 {
     int* int_p = (int*)cpu_p;
-    for (int i = 0; i < N; i++)
+
+    if(all_elements)
     {
-        std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
+        for (int i = 0; i < N; i++)
+        {
+            std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
+        }
+	}
+    else
+    {
+        if (between)
+        {
+            for (int i = firstN_element; i <= lastN_element; i++)
+            {
+                std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
+            }
+        }
+        else
+        {
+            for (int i = 0; i < firstN_element; i++)
+            {
+                std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
+            }
+
+            for (int i = N - lastN_element - 1; i < N; i++)
+            {
+                std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
+            }
+        }
+
     }
+
+}
+
+void printOutOccupancy(cudaDeviceProp &prop, int number_of_elements, int blockSize, int gridSize, std::string title)
+{
+	std::cout << "----- " << title << " -----" << std::endl;
+    int warpsPerBlock = (blockSize + prop.warpSize - 1) / prop.warpSize;
+    int activeWarpsPerSM = gridSize * warpsPerBlock;
+    int activeWarps = gridSize * blockSize / prop.warpSize;
+    int maxWarpsPerSM = prop.maxThreadsPerMultiProcessor / prop.warpSize;
+    float occ = (float)activeWarpsPerSM / (float)maxWarpsPerSM;
+    std::cout << "Number of elements: " << number_of_elements << std::endl;
+    std::cout << "blockSize (threadsPerBlock): " << blockSize << std::endl;
+    std::cout << "gridSize  (Number of Blocks): " << gridSize << std::endl;
+    std::cout << "Total Cover (gridSize  * blockSize): " << gridSize * blockSize << std::endl;
+    std::cout << "Total Cover : % " << static_cast<float>((gridSize * blockSize))/static_cast<float>(N)*100 << std::endl;
+    std::cout << "warpSize: " << prop.warpSize << std::endl;
+    std::cout << "maxThreadsPerMultiProcessor: " << prop.maxThreadsPerMultiProcessor << std::endl;
+    std::cout << "maxWarpsPerSM: " << maxWarpsPerSM << " (prop.maxThreadsPerMultiProcessor / prop.warpSize)" << std::endl << std::endl;
+
+    std::cout << "activeWarps: " << activeWarps << " (gridSize  * blockSize / prop.warpSize)" << std::endl;
+    std::cout << "Occupancy: " << (double)activeWarps / maxWarpsPerSM * 100 << "%" << " (activeWarps / maxWarpsPerSM)" << std::endl << std::endl;
+
+    std::cout << "warpsPerBlock: " << warpsPerBlock << " ((blockSize + prop.warpSize - 1) / prop.warpSize)" << std::endl;
+    std::cout << "activeWarpsPerSM: " << activeWarpsPerSM << " (gridSize * warpsPerBlock)" << std::endl;
+    std::cout << "Occupancy: " << occ * 100 << "%" << " (activeWarpsPerSM / maxWarpsPerSM)" << std::endl << std::endl;
+    // (Optional) total resident warps on the whole GPU:
+    std::cout << "total resident warps (device-wide, theoretical): " << activeWarpsPerSM * prop.multiProcessorCount << std::endl << std::endl;
 }
 
 int main()
@@ -166,53 +236,51 @@ int main()
 	//basic_gpu_increment_kernel <<<2, N >>> ((int*)gpu_p);
 
 	//--------------------------- calculate occupancy ---------------------------
-    int activeBlocksPerSM;        // Occupancy in terms of active blocks
-    int blockSize = N/2;
-    size_t dynamicSmemBytes = 0;
+    
+    size_t dynamicSmemBytes = 0;//dynamicSMemSize: per - block dynamic shared memory you intend to use(bytes)
+	size_t blockSizeLimit = 0;//blockSizeLimit : max block size your kernel is designed to work with; 0 means “no limit.”
+    //So 0, 0 means: “assume no dynamic shared memory” and “don’t cap the block size.” 
 
     // These variables are used to convert occupancy to warps
     int device;
     cudaDeviceProp prop;
-    int activeWarps;
-    int maxWarpsPerSM;
 
     cudaGetDevice(&device);
     cudaGetDeviceProperties(&prop, device);
 
+    int blockSizeGiven = 128;//N/2;
+    int activeBlocksPerSMByCUDA;        // Occupancy in terms of active blocks
     cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &activeBlocksPerSM,
+        &activeBlocksPerSMByCUDA,
         basic_gpu_increment_kernel_MB,
-        blockSize,
+        blockSizeGiven,
         dynamicSmemBytes);
 
-    activeBlocksPerSM = 1;
-    int warpsPerBlock = (blockSize + prop.warpSize - 1) / prop.warpSize;
-    int activeWarpsPerSM = activeBlocksPerSM * warpsPerBlock;
-    activeWarps = activeBlocksPerSM * blockSize / prop.warpSize;
-    maxWarpsPerSM = prop.maxThreadsPerMultiProcessor / prop.warpSize;
-    float occ = (float)activeWarpsPerSM / (float)maxWarpsPerSM;
+    printOutOccupancy(prop, N, blockSizeGiven, activeBlocksPerSMByCUDA, "GridSize (activeBlocksPerSM) By cudaOccupancyMaxActiveBlocksPerMultiprocessor");
 
-    std::cout << "N: " << N << std::endl;
-    std::cout << "blockSize (threadsPerBlock given): " << blockSize << std::endl;
-    std::cout << "activeBlocksPerSM  (calculated by NVIDIA): " << activeBlocksPerSM << std::endl;
-    std::cout << "warpSize: " << prop.warpSize << std::endl;
-    std::cout << "maxThreadsPerMultiProcessor: " << prop.maxThreadsPerMultiProcessor << std::endl;
-    std::cout << "maxWarpsPerSM: " << maxWarpsPerSM << " (prop.maxThreadsPerMultiProcessor / prop.warpSize)" << std::endl  << std::endl;
+    //Option B (grid-stride): you may use minGridSize (or a few multiples of SM count) as your launch grid size,
+    int minGridSizeByCUDA = 0;
+    int blockSizeByCUDA = 0;
+    cudaOccupancyMaxPotentialBlockSize(
+        &minGridSizeByCUDA, 
+        &blockSizeByCUDA, 
+        basic_gpu_increment_kernel_MB, 
+        dynamicSmemBytes, blockSizeLimit);
 
-    std::cout << "activeBlocksPerSM  * blockSize: " << activeBlocksPerSM * blockSize << std::endl;
-    std::cout << "activeWarps: " << activeWarps << " (activeBlocksPerSM  * blockSize / prop.warpSize)" << std::endl;
-    std::cout << "Occupancy: " << (double)activeWarps / maxWarpsPerSM * 100 << "%" << " (activeWarps / maxWarpsPerSM)" << std::endl << std::endl;
+    printOutOccupancy(prop, N, blockSizeByCUDA, minGridSizeByCUDA, "Option B GridSize & BlockSize By cudaOccupancyMaxPotentialBlockSize (Need Stride)");
 
-    std::cout << "warpsPerBlock: " << warpsPerBlock << " ((blockSize + prop.warpSize - 1) / prop.warpSize)" << std::endl;
-    std::cout << "activeWarpsPerSM: " << activeWarpsPerSM << " (activeBlocksPerSM * warpsPerBlock)" << std::endl;
-    std::cout << "Occupancy: " << occ * 100 << "%" << " (activeWarpsPerSM / maxWarpsPerSM)" << std::endl;
-
-    // (Optional) total resident warps on the whole GPU:
-    std::cout << "total resident warps (device-wide, theoretical): " << activeWarpsPerSM * prop.multiProcessorCount << std::endl << std::endl;
-    
-
+    //Option A(no stride) : use occupancy helper only to pick a decent blockSize, but compute grid from N.
+    int gridSizeNeeded = (N + blockSizeByCUDA - 1) / blockSizeByCUDA;   // coverage
+    printOutOccupancy(prop, N, blockSizeByCUDA, gridSizeNeeded, "Option A BlockSize By cudaOccupancyMaxPotentialBlockSize (gridSizeNeeded NO Need Stride)");
+  
     //basic_gpu_increment_kernel << <activeBlocksPerSM , blockSize >> > ((int*)gpu_p);
-    basic_gpu_increment_kernel_MB << <activeBlocksPerSM, blockSize >> > ((int*)gpu_p, N);
+    int numBlocksNeeded = (N + blockSizeGiven - 1) / blockSizeGiven;//activeBlocksPerSM = N / blockSize; - without stride
+    printOutOccupancy(prop, N, blockSizeGiven, numBlocksNeeded, "GridSize By (N/blockSize)");
+	std::cout << "numBlocksNeeded (without stride): " << numBlocksNeeded << "<> activeBlocksPerSM: " << activeBlocksPerSMByCUDA << std::endl << std::endl;
+
+	int blockSize = blockSizeByCUDA;
+	int gridSize = gridSizeNeeded;
+    basic_gpu_increment_kernel_MB << <gridSize, blockSize >> > ((int*)gpu_p, N);
 
     //--------------------------- calculate occupancy ---------------------------
 
@@ -220,12 +288,13 @@ int main()
 	assert(result == cudaSuccess);
 
 	gpu_memory_to_cpu_memory();
-    print_cpu_numbers();
+    print_cpu_numbers(false, true, 55200, 55300);
 
 	gpu_free();
 	cpu_free();
 
-	int rc = getchar();
+	//
+    // int rc = getchar();
 
     return 0;
 }
