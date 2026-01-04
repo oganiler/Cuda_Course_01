@@ -7,7 +7,7 @@
 #include <cstdio>
 #include "device_info.h"
 
-const int N = 128 * 1024;
+const int N = 36 * 128;
 const int ARRAY_BYTES_INT = N * sizeof(int);//allocation size
 
 void* cpu_p;
@@ -95,24 +95,24 @@ __global__ void basic_gpu_increment_kernel_MB(int* g_data, int N)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    unsigned int current_thrednum = atomicAdd(&thrednum, 1);
+    //unsigned int current_thrednum = atomicAdd(&thrednum, 1);
 
-    if (threadIdx.x == 0) {
-        printf("blockIdx=%d  gridDim=%d  blockDim=%d N=%d gridDim.x * blockDim.x = %d\n",
-            blockIdx.x, gridDim.x, blockDim.x, N, gridDim.x * blockDim.x);
-    }
+    //if (threadIdx.x == 0) {
+    //    printf("blockIdx=%d  gridDim=%d  blockDim=%d N=%d gridDim.x * blockDim.x = %d\n",
+    //        blockIdx.x, gridDim.x, blockDim.x, N, gridDim.x * blockDim.x);
+    //}
 
     //if (blockIdx.x == 0 && threadIdx.x == 16) {
     //    printf("");
     //}
 
     if (idx < N) {
-        unsigned int current_launchnum = atomicAdd(&launchnum, 1);
+        //unsigned int current_launchnum = atomicAdd(&launchnum, 1);
 
         //launch
-        int current_data = g_data[idx];
+        //int current_data = g_data[idx];
         g_data[idx] *= 2;
-        int current_updated_data = g_data[idx];
+        //int current_updated_data = g_data[idx];
 
         //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d thrednum=%u|\n",
         //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, current_thrednum);
@@ -129,20 +129,20 @@ __global__ void basic_gpu_increment_kernel_stride(int* g_data, int N)
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    if (threadIdx.x == 0) {
-        printf("blockIdx=%d  gridDim=%d  blockDim=%d\n",
-            blockIdx.x, gridDim.x, blockDim.x);
-    }
+    //if (threadIdx.x == 0) {
+    //    printf("blockIdx=%d  gridDim=%d  blockDim=%d\n",
+    //        blockIdx.x, gridDim.x, blockDim.x);
+    //}
 
-    unsigned int current_thrednum = atomicAdd(&thrednum, 1) + 1;
+    //unsigned int current_thrednum = atomicAdd(&thrednum, 1) + 1;
 
     for (; idx < N; idx += stride) {
-        unsigned int current_launchnum = atomicAdd(&launchnum, 1) + 1;
+        //unsigned int current_launchnum = atomicAdd(&launchnum, 1) + 1;
 
         //launch
-        int current_data = g_data[idx];
+        //int current_data = g_data[idx];
         g_data[idx] *= 2;
-		int current_updated_data = g_data[idx];
+		//int current_updated_data = g_data[idx];
 
         //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d stride=%d thrednum=%u|\n",
         //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, stride, current_thrednum);
@@ -264,7 +264,7 @@ int main()
     cudaOccupancyMaxPotentialBlockSize(
         &minGridSizeByCUDA, 
         &blockSizeByCUDA, 
-        basic_gpu_increment_kernel_MB, 
+        basic_gpu_increment_kernel_MB,
         dynamicSmemBytes, blockSizeLimit);
 
     printOutOccupancy(prop, N, blockSizeByCUDA, minGridSizeByCUDA, "Option B GridSize & BlockSize By cudaOccupancyMaxPotentialBlockSize (Need Stride)");
@@ -277,24 +277,42 @@ int main()
     int numBlocksNeeded = (N + blockSizeGiven - 1) / blockSizeGiven;//activeBlocksPerSM = N / blockSize; - without stride
     printOutOccupancy(prop, N, blockSizeGiven, numBlocksNeeded, "GridSize By (N/blockSize)");
 	std::cout << "numBlocksNeeded (without stride): " << numBlocksNeeded << "<> activeBlocksPerSM: " << activeBlocksPerSMByCUDA << std::endl << std::endl;
+    
+	//kernel_MB launch - blockSize by cudaOccupancyMaxPotentialBlockSize - without stride
+	//int blockSize = blockSizeByCUDA;
+	//int gridSize = gridSizeNeeded;
+    // 
+	//kernel_stride - gridSize by cudaOccupancyMaxActiveBlocksPerMultiprocessor
+    //int blockSize = blockSizeGiven;
+    //int gridSize = activeBlocksPerSMByCUDA;
+    
+    //kernel_stride launch - blockSize & gridSize by cudaOccupancyMaxPotentialBlockSize - need stride
+    //int blockSize = blockSizeByCUDA;
+    //int gridSize = minGridSizeByCUDA;
 
-	int blockSize = blockSizeByCUDA;
-	int gridSize = gridSizeNeeded;
+	//kernel_MB launch - manually calculated gridSize from Block Size - no need stride
+    int blockSize = blockSizeGiven;
+    int gridSize = numBlocksNeeded;
     basic_gpu_increment_kernel_MB << <gridSize, blockSize >> > ((int*)gpu_p, N);
 
     //--------------------------- calculate occupancy ---------------------------
 
-	cudaError_t result = cudaDeviceSynchronize();
-	assert(result == cudaSuccess);
+	// CudaMemcpy is asynchronous with respect to the host unless cudaDeviceSynchronize is called to block the host until the device has completed all preceding requested tasks.
+	// so that when you call cudaMemcpy to copy data from device to host, the copy will not start until all preceding kernels have completed.
+	// we can avoid calling cudaDeviceSynchronize here.
+	//cudaError_t result = cudaDeviceSynchronize();
+	//assert(result == cudaSuccess);
 
 	gpu_memory_to_cpu_memory();
-    print_cpu_numbers(false, true, 55200, 55300);
+    print_cpu_numbers(false, false, 18, 12);
+    std::cout << "***" << std::endl;
 
 	gpu_free();
 	cpu_free();
-
+	
 	//
     // int rc = getchar();
+    //std::cin.get();
 
     return 0;
 }
