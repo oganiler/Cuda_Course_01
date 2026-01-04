@@ -79,10 +79,12 @@
   <ItemGroup>
     <CudaCompile Include="device_info.cu" />
     <CudaCompile Include="kernel.cu" />
+    <CudaCompile Include="profiling.cu" />
     <CudaCompile Include="sampleVectorByMS.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="device_info.h" />
+    <ClInclude Include="profiling.h" />
     <ClInclude Include="sampleVectorByMS.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
