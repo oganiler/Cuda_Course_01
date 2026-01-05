@@ -17,6 +17,222 @@ void* gpu_p;
 __device__ unsigned int thrednum = 0;
 __device__ unsigned int launchnum = 0;
 
+void print_cpu_numbers(int* cpu_memory, int number_of_elements, bool all_elements, bool between, int firstN_element, int lastN_element)
+{
+    int* int_p = cpu_memory;
+
+    if (all_elements)
+    {
+        for (int i = 0; i < number_of_elements; i++)
+        {
+            std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
+        }
+    }
+    else
+    {
+        if (between)
+        {
+            for (int i = firstN_element; i <= lastN_element; i++)
+            {
+                std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
+            }
+        }
+        else
+        {
+            for (int i = 0; i < firstN_element; i++)
+            {
+                std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
+            }
+
+            for (int i = number_of_elements - lastN_element - 1; i < number_of_elements; i++)
+            {
+                std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
+            }
+        }
+
+    }
+
+}
+
+__global__ void basic_gpu_increment_kernel_1B(int* g_data)
+{
+    int idx = threadIdx.x;
+    unsigned int current_thrednum = atomicAdd(&thrednum, 1);
+
+    //if (threadIdx.x == 0) {
+    //    printf("blockIdx=%d  gridDim=%d  blockDim=%d\n",
+    //        blockIdx.x, gridDim.x, blockDim.x);
+    //}
+
+    if (idx < N)
+    {
+        unsigned int current_launchnum = atomicAdd(&launchnum, 1);
+
+        //launch
+        int current_data = g_data[idx];
+        g_data[idx] *= 2;
+        int current_updated_data = g_data[idx];
+
+        //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d thrednum=%u|\n",
+        //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, current_thrednum);
+    }
+
+    //printf("thrednum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d\n",
+    //    current_thrednum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x);
+}
+
+// So it can only update all elements if:gridDim.x * blockDim.x >= N when cudaOccupancyMaxActiveBlocksPerMultiprocessor is not used
+// optionally "int numBlocksNeeded = (N + blockSize - 1) / blockSize" can be used to calculate the number of blocks needed without stride (simply N / blockSize if N is divisible by blockSize)
+__global__ void basic_gpu_increment_kernel_MB(int* g_data, int N)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    //unsigned int current_thrednum = atomicAdd(&thrednum, 1);
+
+    //if (threadIdx.x == 0) {
+    //    printf("blockIdx=%d  gridDim=%d  blockDim=%d N=%d gridDim.x * blockDim.x = %d\n",
+    //        blockIdx.x, gridDim.x, blockDim.x, N, gridDim.x * blockDim.x);
+    //}
+
+    //if (blockIdx.x == 0 && threadIdx.x == 16) {
+    //    printf("");
+    //}
+
+    if (idx < N) {
+        //unsigned int current_launchnum = atomicAdd(&launchnum, 1);
+
+        //launch
+        //int current_data = g_data[idx];
+        g_data[idx] *= 2;
+        //int current_updated_data = g_data[idx];
+
+        //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d thrednum=%u|\n",
+        //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, current_thrednum);
+    }
+
+    //printf("thrednum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d\n",
+    //    current_thrednum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x);
+}
+
+
+//Use a grid - stride loop, so you can launch “enough blocks to keep the GPU busy” regardless of N
+__global__ void basic_gpu_increment_kernel_stride(int* g_data, int N)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    //if (threadIdx.x == 0) {
+    //    printf("blockIdx=%d  gridDim=%d  blockDim=%d\n",
+    //        blockIdx.x, gridDim.x, blockDim.x);
+    //}
+
+    //unsigned int current_thrednum = atomicAdd(&thrednum, 1) + 1;
+
+    for (; idx < N; idx += stride) {
+        //unsigned int current_launchnum = atomicAdd(&launchnum, 1) + 1;
+
+        //launch
+        //int current_data = g_data[idx];
+        g_data[idx] *= 2;
+        //int current_updated_data = g_data[idx];
+
+        //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d stride=%d thrednum=%u|\n",
+        //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, stride, current_thrednum);
+    }
+
+    //printf("thrednum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d\n",
+    //    current_thrednum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x);
+}
+
+//------------------ - Streamline multiple instance management------------------------
+#define INSTANCE_COUNT 2
+struct cpu_gpu_mem
+{
+    void* cpu_p;
+    void* gpu_p;
+    size_t nc;
+};
+
+void executeGPUMultipleInstances()
+{
+    const int instance_count = INSTANCE_COUNT;
+	struct cpu_gpu_mem cgs[INSTANCE_COUNT];
+
+	//allocate memory for multiple instances
+    for(int i = 0; i < instance_count; i++)
+    {
+		struct cpu_gpu_mem* cg = &cgs[i];
+        cg->nc = static_cast<size_t>(32 * 1024) * 1024;//32M elements
+
+		//CPU allocation
+        cg->cpu_p = malloc(cg->nc * sizeof(int));
+		assert(cg->cpu_p != nullptr);
+
+		//GPU allocation
+        cudaError_t err = cudaMalloc(&cg->gpu_p, cg->nc * sizeof(int));
+        assert(err == cudaSuccess);
+
+		//set numbers on CPU
+        int* int_p = (int*)cg->cpu_p;
+        for (size_t j = 0; j < cg->nc; j++)
+        {
+            int_p[j] = static_cast<int>(j + 1);
+		}
+
+		//register CPU memory for GPU access
+        cudaError_t err_register = cudaHostRegister(cg->cpu_p, cg->nc * sizeof(int), 0);//cudaHostRegisterMapped is suggested
+		assert(err_register == cudaSuccess);
+	}
+
+    //execute GPU kernel for multiple instances
+    for (int i = 0; i < instance_count; i++)
+    {
+        struct cpu_gpu_mem* cg = &cgs[i];
+
+        //copy CPU memory to GPU memory
+        cudaError_t err_copy = cudaMemcpy(cg->gpu_p, cg->cpu_p, cg->nc * sizeof(int), cudaMemcpyHostToDevice);
+        assert(err_copy == cudaSuccess);
+
+        //launch kernel
+        int blockSize = 256;
+        int gridSize = (static_cast<int>(cg->nc) + blockSize - 1) / blockSize;
+        basic_gpu_increment_kernel_MB << <gridSize, blockSize >> > ((int*)cg->gpu_p, static_cast<int>(cg->nc));
+
+        //copy GPU memory back to CPU memory
+        cudaError_t err_copy_back = cudaMemcpy(cg->cpu_p, cg->gpu_p, cg->nc * sizeof(int), cudaMemcpyDeviceToHost);
+        assert(err_copy_back == cudaSuccess);
+	}
+
+	//unregister and free memory for multiple instances
+    for (int i = 0; i < instance_count; i++)
+    {
+        struct cpu_gpu_mem* cg = &cgs[i];
+
+        //unregister CPU memory
+        cudaError_t err_unregister = cudaHostUnregister(cg->cpu_p);
+        assert(err_unregister == cudaSuccess);
+
+        //free GPU memory
+        cudaError_t err_free_gpu = cudaFree(cg->gpu_p);
+        assert(err_free_gpu == cudaSuccess);
+        cg->gpu_p = nullptr;
+
+		//print CPU memory
+        //std::cout << "Print For Instance " << i << " :" << std::endl;
+        //int* int_p = (int*)cg->cpu_p;
+        //print_cpu_numbers(int_p, cg->nc, false, false, 18, 12);
+        //std::cout << std::endl << std::endl;
+
+        //free CPU memory
+        free(cg->cpu_p);
+        cg->cpu_p = nullptr;
+	}
+
+	std::cout << "Multiple Instance Execution Completed." << std::endl;
+}
+
+//------------------- Streamline multiple instance management ------------------------
+
 void cpu_alloc()
 {
     cpu_p = malloc(ARRAY_BYTES_INT);
@@ -227,133 +443,6 @@ void cpu_gpu_device_to_host()
     cpu_gpu_mem_copy(cudaMemcpyDeviceToHost, (int*)gpu_p);
 }
 
-__global__ void basic_gpu_increment_kernel_1B(int* g_data)
-{
-    int idx = threadIdx.x;
-    unsigned int current_thrednum = atomicAdd(&thrednum, 1);
-
-    //if (threadIdx.x == 0) {
-    //    printf("blockIdx=%d  gridDim=%d  blockDim=%d\n",
-    //        blockIdx.x, gridDim.x, blockDim.x);
-    //}
-
-    if (idx < N)
-    {
-        unsigned int current_launchnum = atomicAdd(&launchnum, 1);
-
-        //launch
-        int current_data = g_data[idx];
-        g_data[idx] *= 2;
-        int current_updated_data = g_data[idx];
-
-        //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d thrednum=%u|\n",
-        //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, current_thrednum);
-    }
-
-    //printf("thrednum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d\n",
-    //    current_thrednum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x);
-}
-
-// So it can only update all elements if:gridDim.x * blockDim.x >= N when cudaOccupancyMaxActiveBlocksPerMultiprocessor is not used
-// optionally "int numBlocksNeeded = (N + blockSize - 1) / blockSize" can be used to calculate the number of blocks needed without stride (simply N / blockSize if N is divisible by blockSize)
-__global__ void basic_gpu_increment_kernel_MB(int* g_data, int N)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    //unsigned int current_thrednum = atomicAdd(&thrednum, 1);
-
-    //if (threadIdx.x == 0) {
-    //    printf("blockIdx=%d  gridDim=%d  blockDim=%d N=%d gridDim.x * blockDim.x = %d\n",
-    //        blockIdx.x, gridDim.x, blockDim.x, N, gridDim.x * blockDim.x);
-    //}
-
-    //if (blockIdx.x == 0 && threadIdx.x == 16) {
-    //    printf("");
-    //}
-
-    if (idx < N) {
-        //unsigned int current_launchnum = atomicAdd(&launchnum, 1);
-
-        //launch
-        //int current_data = g_data[idx];
-        g_data[idx] *= 2;
-        //int current_updated_data = g_data[idx];
-
-        //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d thrednum=%u|\n",
-        //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, current_thrednum);
-    }
-
-    //printf("thrednum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d\n",
-    //    current_thrednum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x);
-}
-
-
-//Use a grid - stride loop, so you can launch “enough blocks to keep the GPU busy” regardless of N
-__global__ void basic_gpu_increment_kernel_stride(int* g_data, int N)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-
-    //if (threadIdx.x == 0) {
-    //    printf("blockIdx=%d  gridDim=%d  blockDim=%d\n",
-    //        blockIdx.x, gridDim.x, blockDim.x);
-    //}
-
-    //unsigned int current_thrednum = atomicAdd(&thrednum, 1) + 1;
-
-    for (; idx < N; idx += stride) {
-        //unsigned int current_launchnum = atomicAdd(&launchnum, 1) + 1;
-
-        //launch
-        //int current_data = g_data[idx];
-        g_data[idx] *= 2;
-        //int current_updated_data = g_data[idx];
-
-        //printf("launchnum=%u data=%d --> %d |block=%d thread=%d idx=%d gridDim=%d blockDim=%d stride=%d thrednum=%u|\n",
-        //    current_launchnum, current_data, current_updated_data, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x, stride, current_thrednum);
-    }
-
-    //printf("thrednum=%u block=%d thread=%d idx=%d gridDim=%d blockDim=%d\n",
-    //    current_thrednum, blockIdx.x, threadIdx.x, idx, gridDim.x, blockDim.x);
-}
-
-void print_cpu_numbers(bool all_elements, bool between, int firstN_element, int lastN_element)
-{
-    int* int_p = (int*)cpu_p;
-
-    if (all_elements)
-    {
-        for (int i = 0; i < N; i++)
-        {
-            std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
-        }
-    }
-    else
-    {
-        if (between)
-        {
-            for (int i = firstN_element; i <= lastN_element; i++)
-            {
-                std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
-            }
-        }
-        else
-        {
-            for (int i = 0; i < firstN_element; i++)
-            {
-                std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
-            }
-
-            for (int i = N - lastN_element - 1; i < N; i++)
-            {
-                std::cout << "Number " << i + 1 << " : " << int_p[i] << std::endl;
-            }
-        }
-
-    }
-
-}
-
 void printOutOccupancy(cudaDeviceProp& prop, int number_of_elements, int blockSize, int gridSize, std::string title)
 {
     std::cout << "----- " << title << " -----" << std::endl;
@@ -482,7 +571,7 @@ int runProfilingMain()
     cpu_gpu_device_to_host();
 	cpu_gpu_unpin(); // unpin cpu memory after copy
 
-    print_cpu_numbers(false, false, 18, 12);
+    print_cpu_numbers((int*)cpu_p, N, false, false, 18, 12);
 
     std::cout << "***" << std::endl;
 

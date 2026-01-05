@@ -10,7 +10,9 @@
 int main()
 {
     //PrintCudaDeviceInfo();
-    runProfilingMain();
+    //runProfilingMain();
+
+    executeGPUMultipleInstances();
 
     return 0;
 }
