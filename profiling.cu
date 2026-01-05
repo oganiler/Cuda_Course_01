@@ -245,8 +245,8 @@ void executeGPUMultipleInstancesStream()
         struct cpu_gpu_mem* cg = &cgs[i];
         cg->nc = static_cast<size_t>(32 * 1024) * 1024;//32M elements
 
-		//create stream
-        cudaError_t stream_err = cudaStreamCreate(&cg->stream);
+        // create stream --> Better: NonBlocking to avoid legacy default-stream interactions (instead of cudaStreamCreate)
+        cudaError_t stream_err = cudaStreamCreateWithFlags(&cg->stream, cudaStreamNonBlocking);
         assert(stream_err == cudaSuccess);
 
         //CPU allocation
@@ -293,7 +293,25 @@ void executeGPUMultipleInstancesStream()
         assert(err_copy_back == cudaSuccess);
     }
 
-    //unregister and free memory for multiple instances
+    // synchronize FIRST (per stream is clearer than device-wide)
+    for (int i = 0; i < instance_count; i++)
+    {
+        cudaError_t sync_err = cudaStreamSynchronize(cgs[i].stream);
+        assert(sync_err == cudaSuccess);
+    }
+    // (cudaStreamSynchronize blocks until all work in that stream completes.) :contentReference[oaicite:3]{index=3}
+
+    //now it's safe to print - print CPU memory
+    for (int i = 0; i < instance_count; i++)
+    {
+        std::cout << "Print For Instance " << i << " :" << std::endl;
+        struct cpu_gpu_mem* cg = &cgs[i];
+        int* int_p = (int*)cg->cpu_p;
+        print_cpu_numbers(int_p, cg->nc, false, false, 5, 5);
+        std::cout << std::endl << std::endl;
+    }
+
+    //// cleanup LAST - unregister and free memory for multiple instances
     for (int i = 0; i < instance_count; i++)
     {
         struct cpu_gpu_mem* cg = &cgs[i];
@@ -308,32 +326,12 @@ void executeGPUMultipleInstancesStream()
         cg->gpu_p = nullptr;
 
 		//free CPU memory -- will free after synchronization to ensure all streams are completed and printed out
-        //free(cg->cpu_p);
-        //cg->cpu_p = nullptr;
+        free(cg->cpu_p);
+        cg->cpu_p = nullptr;
 
 		//destroy the streams created
         cudaError_t stream_err = cudaStreamDestroy(cg->stream);
 		assert(stream_err == cudaSuccess);
-    }
-
-    cudaDeviceSynchronize(); //ensure all streams are completed
-
-    //print CPU memory
-    for (int i = 0; i < instance_count; i++)
-    {
-        std::cout << "Print For Instance " << i << " :" << std::endl;
-        struct cpu_gpu_mem* cg = &cgs[i];
-        int* int_p = (int*)cg->cpu_p;
-        print_cpu_numbers(int_p, cg->nc, false, false, 5, 5);
-        std::cout << std::endl << std::endl;
-    }
-
-    //free CPU memory
-    for (int i = 0; i < instance_count; i++)
-    {
-        struct cpu_gpu_mem* cg = &cgs[i];
-        free(cg->cpu_p);
-        cg->cpu_p = nullptr;
     }
 
     std::cout << "Multiple Instance Execution Completed." << std::endl;
