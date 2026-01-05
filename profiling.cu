@@ -146,7 +146,7 @@ __global__ void basic_gpu_increment_kernel_stride(int* g_data, int N)
 }
 
 //------------------ - Streamline multiple instance management------------------------
-#define INSTANCE_COUNT 2
+#define INSTANCE_COUNT 3
 struct cpu_gpu_mem
 {
     void* cpu_p;
@@ -243,7 +243,7 @@ void executeGPUMultipleInstancesStream()
     for (int i = 0; i < instance_count; i++)
     {
         struct cpu_gpu_mem* cg = &cgs[i];
-        cg->nc = static_cast<size_t>(64 * 1024) * 1024;//32M elements
+        cg->nc = static_cast<size_t>(32 * 1024) * 1024;//32M elements
 
 		//create stream
         cudaError_t stream_err = cudaStreamCreate(&cg->stream);
@@ -275,7 +275,7 @@ void executeGPUMultipleInstancesStream()
         struct cpu_gpu_mem* cg = &cgs[i];
 
         //copy CPU memory to GPU memory
-        cudaError_t err_copy = cudaMemcpyAsync(cg->gpu_p, cg->cpu_p, cg->nc * sizeof(int), cudaMemcpyHostToDevice);
+        cudaError_t err_copy = cudaMemcpyAsync(cg->gpu_p, cg->cpu_p, cg->nc * sizeof(int), cudaMemcpyHostToDevice, cg->stream);
         assert(err_copy == cudaSuccess);
 
         //launch kernel
@@ -289,7 +289,7 @@ void executeGPUMultipleInstancesStream()
         }
 
         //copy GPU memory back to CPU memory
-        cudaError_t err_copy_back = cudaMemcpyAsync(cg->cpu_p, cg->gpu_p, cg->nc * sizeof(int), cudaMemcpyDeviceToHost);
+        cudaError_t err_copy_back = cudaMemcpyAsync(cg->cpu_p, cg->gpu_p, cg->nc * sizeof(int), cudaMemcpyDeviceToHost, cg->stream);
         assert(err_copy_back == cudaSuccess);
     }
 
