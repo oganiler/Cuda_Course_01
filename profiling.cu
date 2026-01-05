@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <cstdio>
 #include "device_info.h"
+#include "driver_types.h" //to work on streams //cuda_runtime_api.h
 
 const int N = 128 * 1024;
 const size_t ARRAY_BYTES_INT = N * sizeof(int);//allocation size
@@ -151,6 +152,7 @@ struct cpu_gpu_mem
     void* cpu_p;
     void* gpu_p;
     size_t nc;
+	cudaStream_t stream;
 };
 
 void executeGPUMultipleInstances()
@@ -229,6 +231,112 @@ void executeGPUMultipleInstances()
 	}
 
 	std::cout << "Multiple Instance Execution Completed." << std::endl;
+}
+
+void executeGPUMultipleInstancesStream()
+{
+    const int instance_count = INSTANCE_COUNT;
+	const int launches_per_instance = 5;
+    struct cpu_gpu_mem cgs[INSTANCE_COUNT];
+
+    //allocate memory for multiple instances
+    for (int i = 0; i < instance_count; i++)
+    {
+        struct cpu_gpu_mem* cg = &cgs[i];
+        cg->nc = static_cast<size_t>(64 * 1024) * 1024;//32M elements
+
+		//create stream
+        cudaError_t stream_err = cudaStreamCreate(&cg->stream);
+        assert(stream_err == cudaSuccess);
+
+        //CPU allocation
+        cg->cpu_p = malloc(cg->nc * sizeof(int));
+        assert(cg->cpu_p != nullptr);
+
+        //GPU allocation
+        cudaError_t err = cudaMalloc(&cg->gpu_p, cg->nc * sizeof(int));
+        assert(err == cudaSuccess);
+
+        //set numbers on CPU
+        int* int_p = (int*)cg->cpu_p;
+        for (size_t j = 0; j < cg->nc; j++)
+        {
+            int_p[j] = static_cast<int>(j + 1);
+        }
+
+        //register CPU memory for GPU access
+        cudaError_t err_register = cudaHostRegister(cg->cpu_p, cg->nc * sizeof(int), 0);//cudaHostRegisterMapped is suggested
+        assert(err_register == cudaSuccess);
+    }
+
+    //execute GPU kernel for multiple instances
+    for (int i = 0; i < instance_count; i++)
+    {
+        struct cpu_gpu_mem* cg = &cgs[i];
+
+        //copy CPU memory to GPU memory
+        cudaError_t err_copy = cudaMemcpyAsync(cg->gpu_p, cg->cpu_p, cg->nc * sizeof(int), cudaMemcpyHostToDevice);
+        assert(err_copy == cudaSuccess);
+
+        //launch kernel
+        int blockSize = 256;
+        int gridSize = (static_cast<int>(cg->nc) + blockSize - 1) / blockSize;
+
+		//launch multiple times per instance
+        for (int launch_idx = 1; launch_idx <= launches_per_instance; launch_idx++)
+        {
+            basic_gpu_increment_kernel_MB << <gridSize, blockSize, 0, cg->stream >> > ((int*)cg->gpu_p, static_cast<int>(cg->nc));
+        }
+
+        //copy GPU memory back to CPU memory
+        cudaError_t err_copy_back = cudaMemcpyAsync(cg->cpu_p, cg->gpu_p, cg->nc * sizeof(int), cudaMemcpyDeviceToHost);
+        assert(err_copy_back == cudaSuccess);
+    }
+
+    //unregister and free memory for multiple instances
+    for (int i = 0; i < instance_count; i++)
+    {
+        struct cpu_gpu_mem* cg = &cgs[i];
+
+        //unregister CPU memory
+        cudaError_t err_unregister = cudaHostUnregister(cg->cpu_p);
+        assert(err_unregister == cudaSuccess);
+
+        //free GPU memory
+        cudaError_t err_free_gpu = cudaFree(cg->gpu_p);
+        assert(err_free_gpu == cudaSuccess);
+        cg->gpu_p = nullptr;
+
+		//free CPU memory -- will free after synchronization to ensure all streams are completed and printed out
+        //free(cg->cpu_p);
+        //cg->cpu_p = nullptr;
+
+		//destroy the streams created
+        cudaError_t stream_err = cudaStreamDestroy(cg->stream);
+		assert(stream_err == cudaSuccess);
+    }
+
+    cudaDeviceSynchronize(); //ensure all streams are completed
+
+    //print CPU memory
+    for (int i = 0; i < instance_count; i++)
+    {
+        std::cout << "Print For Instance " << i << " :" << std::endl;
+        struct cpu_gpu_mem* cg = &cgs[i];
+        int* int_p = (int*)cg->cpu_p;
+        print_cpu_numbers(int_p, cg->nc, false, false, 5, 5);
+        std::cout << std::endl << std::endl;
+    }
+
+    //free CPU memory
+    for (int i = 0; i < instance_count; i++)
+    {
+        struct cpu_gpu_mem* cg = &cgs[i];
+        free(cg->cpu_p);
+        cg->cpu_p = nullptr;
+    }
+
+    std::cout << "Multiple Instance Execution Completed." << std::endl;
 }
 
 //------------------- Streamline multiple instance management ------------------------

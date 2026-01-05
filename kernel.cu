@@ -11,8 +11,9 @@ int main()
 {
     //PrintCudaDeviceInfo();
     //runProfilingMain();
+    //executeGPUMultipleInstances();
 
-    executeGPUMultipleInstances();
+    executeGPUMultipleInstancesStream();
 
     return 0;
 }
