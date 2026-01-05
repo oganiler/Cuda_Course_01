@@ -7,8 +7,9 @@
 #include <cstdio>
 #include "device_info.h"
 
-const int N = 36 * 128;
-const int ARRAY_BYTES_INT = N * sizeof(int);//allocation size
+const int N = 128 * 1024;
+const size_t ARRAY_BYTES_INT = N * sizeof(int);//allocation size
+const int pin_limit = 0; // 4 * 1024 * 1024; //16KB
 
 void* cpu_p;
 void* gpu_p;
@@ -20,6 +21,31 @@ void cpu_alloc()
 {
     cpu_p = malloc(ARRAY_BYTES_INT);
     assert(cpu_p != nullptr);
+}
+
+void cpu_for_gpu_alloc()
+{
+// this is just sample how cudaHostAlloc works
+// we will use cudoHostRegister to avoid pinned areas to be blocked for CPU allocation
+
+//#define cudaHostAllocDefault                0x00  /**< Default page-locked allocation flag */
+//#define cudaHostAllocPortable               0x01  /**< Pinned memory accessible by all CUDA contexts */
+//#define cudaHostAllocMapped                 0x02  /**< Map allocation into device space */
+//#define cudaHostAllocWriteCombined          0x04  /**< Write-combined memory */
+//
+//#define cudaHostRegisterDefault             0x00  /**< Default host memory registration flag */
+//#define cudaHostRegisterPortable            0x01  /**< Pinned memory accessible by all CUDA contexts */
+//#define cudaHostRegisterMapped              0x02  /**< Map registered memory into device space */
+//#define cudaHostRegisterIoMemory            0x04  /**< Memory-mapped I/O space */
+//#define cudaHostRegisterReadOnly            0x08  /**< Memory-mapped read-only */
+//
+//#define cudaPeerAccessDefault               0x00  /**< Default peer addressing enable flag */
+//
+//#define cudaStreamDefault                   0x00  /**< Default stream flag */
+//#define cudaStreamNonBlocking               0x01  /**< Stream does not synchronize with stream 0 (the NULL stream) */
+    cudaError_t result = cudaHostAlloc(&cpu_p, ARRAY_BYTES_INT, 0);
+    assert(result == cudaSuccess);
+    //assert(cpu_p != nullptr);
 }
 
 void cpu_set_numbers()
@@ -35,6 +61,13 @@ void cpu_free()
 {
     free(cpu_p);
     cpu_p = nullptr;
+}
+
+void cpu_for_gpu_free()
+{
+    cudaError_t result = cudaFreeHost(cpu_p);
+	assert(result == cudaSuccess);
+    //cpu_p = nullptr;
 }
 
 void gpu_alloc()
@@ -56,10 +89,142 @@ void cpu_memory_to_gpu_memory()
     assert(err == cudaSuccess);
 }
 
+void cpu_memory_to_gpu_memory_by_pinned()
+{
+//#define cudaHostAllocDefault                0x00  /**< Default page-locked allocation flag */
+//#define cudaHostAllocPortable               0x01  /**< Pinned memory accessible by all CUDA contexts */
+//#define cudaHostAllocMapped                 0x02  /**< Map allocation into device space */
+//#define cudaHostAllocWriteCombined          0x04  /**< Write-combined memory */
+//
+//#define cudaHostRegisterDefault             0x00  /**< Default host memory registration flag */
+//#define cudaHostRegisterPortable            0x01  /**< Pinned memory accessible by all CUDA contexts */
+//#define cudaHostRegisterMapped              0x02  /**< Map registered memory into device space */
+//#define cudaHostRegisterIoMemory            0x04  /**< Memory-mapped I/O space */
+//#define cudaHostRegisterReadOnly            0x08  /**< Memory-mapped read-only */
+//
+//#define cudaPeerAccessDefault               0x00  /**< Default peer addressing enable flag */
+//
+//#define cudaStreamDefault                   0x00  /**< Default stream flag */
+//#define cudaStreamNonBlocking               0x01  /**< Stream does not synchronize with stream 0 (the NULL stream) */
+
+	//pin the CPU RAM areas so that GPU can access it faster
+    cudaError_t err_register = cudaHostRegister(cpu_p, ARRAY_BYTES_INT, 0);//cudaHostRegisterMapped is suggested
+    assert(err_register == cudaSuccess);
+
+	//apply the memory copy to the pinned area
+    cudaError_t err_copy = cudaMemcpy(gpu_p, cpu_p, ARRAY_BYTES_INT, cudaMemcpyHostToDevice);
+    assert(err_copy == cudaSuccess);
+
+	//unregister the pinned area after the copy so that CPU can use it normally
+    cudaError_t err_unregister = cudaHostUnregister(cpu_p);
+	assert(err_unregister == cudaSuccess);
+}
+
 void gpu_memory_to_cpu_memory()
 {
     cudaError_t err = cudaMemcpy(cpu_p, gpu_p, ARRAY_BYTES_INT, cudaMemcpyDeviceToHost);
     assert(err == cudaSuccess);
+}
+
+//attention: we pin only the cpu memory, so send here only cpu pointer
+void cpu_gpu_pin()
+{
+    bool pin = (ARRAY_BYTES_INT > pin_limit);
+    cudaError_t result;
+
+    if (pin)
+    {
+        //pin the CPU RAM areas so that GPU can access it faster
+        result = cudaHostRegister(cpu_p, ARRAY_BYTES_INT, 0);//cudaHostRegisterMapped is suggested
+        assert(result == cudaSuccess);
+        std::cout << "cudaHostRegister is ON" << std::endl;
+    }
+    else
+        std::cout << "cudaHostRegister is OFF" << std::endl;
+}
+
+//attention: we unpin only the cpu memory, so send here only cpu pointer
+void cpu_gpu_unpin()
+{
+    bool pin = (ARRAY_BYTES_INT > pin_limit);
+    cudaError_t result;
+    if (pin)
+    {
+        //unregister the pinned area after the copy so that CPU can use it normally
+        result = cudaHostUnregister(cpu_p);
+        assert(result == cudaSuccess);
+    }
+}
+
+//this function is called twice by gpu and cpu pin but we do not need to register and unregister twice, will be handled in the main to register/unregister once.
+void cpu_gpu_mem_copy(enum cudaMemcpyKind copyKind, int* p)
+{
+    cudaError_t result;
+
+    switch (copyKind)
+    {
+    case cudaMemcpyHostToDevice:
+        //apply the memory copy to the pinned area
+        result = cudaMemcpy(gpu_p, cpu_p, ARRAY_BYTES_INT, cudaMemcpyHostToDevice);
+        assert(result == cudaSuccess);
+        break;
+    case cudaMemcpyDeviceToHost:
+        result = cudaMemcpy(cpu_p, gpu_p, ARRAY_BYTES_INT, cudaMemcpyDeviceToHost);
+        assert(result == cudaSuccess);
+        break;
+    default:
+        assert(false); //unsupported copy kind
+    }
+}
+
+//this function is called twice by gpu and cpu pin but we do not need to register and unregister twice, will be handled in the main to register/unregister once.
+void cpu_gpu_register_mem_copy(enum cudaMemcpyKind copyKind, int *p)
+{
+    const int pin_limit = 0; // 4 * 1024 * 1024; //16KB
+    bool pin = (ARRAY_BYTES_INT > pin_limit);
+    cudaError_t result;
+
+    if(pin)
+    {
+        //pin the CPU RAM areas so that GPU can access it faster
+        result = cudaHostRegister(p, ARRAY_BYTES_INT, 0);//cudaHostRegisterMapped is suggested
+        assert(result == cudaSuccess);
+        std::cout << "cudaHostRegister is ON" << std::endl;
+	}
+    else
+        std::cout << "cudaHostRegister is OFF" << std::endl;
+
+    switch (copyKind)
+    {
+        case cudaMemcpyHostToDevice:
+            //apply the memory copy to the pinned area
+            result = cudaMemcpy(gpu_p, cpu_p, ARRAY_BYTES_INT, cudaMemcpyHostToDevice);
+            assert(result == cudaSuccess);
+            break;
+        case cudaMemcpyDeviceToHost:
+            result = cudaMemcpy(cpu_p, gpu_p, ARRAY_BYTES_INT, cudaMemcpyDeviceToHost);
+            assert(result == cudaSuccess);
+            break;
+        default:
+            assert(false); //unsupported copy kind
+    }
+
+    if(pin)
+    {
+        //unregister the pinned area after the copy so that CPU can use it normally
+        result = cudaHostUnregister(p);
+        assert(result == cudaSuccess);
+	}
+}
+
+void cpu_gpu_host_to_device()
+{
+    cpu_gpu_mem_copy(cudaMemcpyHostToDevice, (int*)cpu_p);
+}
+
+void cpu_gpu_device_to_host()
+{
+    cpu_gpu_mem_copy(cudaMemcpyDeviceToHost, (int*)gpu_p);
 }
 
 __global__ void basic_gpu_increment_kernel_1B(int* g_data)
@@ -216,27 +381,15 @@ void printOutOccupancy(cudaDeviceProp& prop, int number_of_elements, int blockSi
     std::cout << "total resident warps (device-wide, theoretical): " << activeWarpsPerSM * prop.multiProcessorCount << std::endl << std::endl;
 }
 
-
-int runProfilingMain()
+void executeGPU()
 {
-    PrintCudaDeviceInfo();
-
-    // Optional: increase printf buffer if you print a lot
-    cudaDeviceSetLimit(cudaLimitPrintfFifoSize, 8 * 1024 * 1024);  // 8MB :contentReference[oaicite:2]{index=2}
-
-    cpu_alloc();
-    cpu_set_numbers();
-
-    gpu_alloc();
-    cpu_memory_to_gpu_memory();
-
     //On current GPUs, a thread block may contain up to 1024 threads.
-    // 		dim3 threadsPerBlock(16, 16); // A thread block size of 16x16 (256 threads), although arbitrary in this case, is a common choice
-    //      dim3 numBlocks(N / threadsPerBlock.x, N / threadsPerBlock.y);
-    //cluster_kernel<<<numBlocks, threadsPerBlock>>>(input, output);
-    //basic_gpu_increment_kernel <<<2, N >>> ((int*)gpu_p);
+// 		dim3 threadsPerBlock(16, 16); // A thread block size of 16x16 (256 threads), although arbitrary in this case, is a common choice
+//      dim3 numBlocks(N / threadsPerBlock.x, N / threadsPerBlock.y);
+//cluster_kernel<<<numBlocks, threadsPerBlock>>>(input, output);
+//basic_gpu_increment_kernel <<<2, N >>> ((int*)gpu_p);
 
-    //--------------------------- calculate occupancy ---------------------------
+//--------------------------- calculate occupancy ---------------------------
 
     size_t dynamicSmemBytes = 0;//dynamicSMemSize: per - block dynamic shared memory you intend to use(bytes)
     size_t blockSizeLimit = 0;//blockSizeLimit : max block size your kernel is designed to work with; 0 means “no limit.”
@@ -303,12 +456,38 @@ int runProfilingMain()
     // we can avoid calling cudaDeviceSynchronize here.
     //cudaError_t result = cudaDeviceSynchronize();
     //assert(result == cudaSuccess);
+}
 
-    gpu_memory_to_cpu_memory();
+int runProfilingMain()
+{
+    PrintCudaDeviceInfo();
+
+    // Optional: increase printf buffer if you print a lot
+    cudaDeviceSetLimit(cudaLimitPrintfFifoSize, 8 * 1024 * 1024);  // 8MB :contentReference[oaicite:2]{index=2}
+
+    //cpu_for_gpu_alloc();// avoid pinned areas to be blocked for CPU allocation, use cudaHostRegister instead
+    cpu_alloc();
+    gpu_alloc();
+
+    cpu_set_numbers();
+
+	cpu_gpu_pin(); // pin cpu memory before copy
+
+    cpu_gpu_host_to_device();
+    //cpu_memory_to_gpu_memory();
+
+    executeGPU();
+
+    //gpu_memory_to_cpu_memory();
+    cpu_gpu_device_to_host();
+	cpu_gpu_unpin(); // unpin cpu memory after copy
+
     print_cpu_numbers(false, false, 18, 12);
+
     std::cout << "***" << std::endl;
 
     gpu_free();
+	//cpu_for_gpu_free(); // avoid pinned areas to be blocked for CPU allocation, use cudaHostRegister instead. this free is for "cudaHostAlloc" function only.
     cpu_free();
 
     //
