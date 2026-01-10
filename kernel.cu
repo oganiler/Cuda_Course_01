@@ -6,14 +6,16 @@
 #include <assert.h>
 #include <cstdio>
 #include "profiling.h"
+#include "device_info.h"
 
 int main()
 {
-    //PrintCudaDeviceInfo();
+    PrintCudaDeviceInfo();
     //runProfilingMain();
     //executeGPUMultipleInstances();
 
-    executeGPUMultipleInstancesStream();
+    //executeGPUMultipleInstancesStream();
+    //executeKernelL1Cache();
 
     return 0;
 }

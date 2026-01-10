@@ -1,4 +1,4 @@
-#include "cuda_runtime.h"
+﻿#include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include <iostream>
 #include <stdio.h>
@@ -53,6 +53,81 @@ void print_cpu_numbers(int* cpu_memory, int number_of_elements, bool all_element
 
     }
 
+}
+
+__global__ void gpu_lernel_use_L1_cache_heavily(int* big_set_numbers, const int big_set_count, int* tiny_set_numbers, const int tiny_set_count)
+{
+    // Use L1 cache heavily by accessing a small set of numbers repeatedly
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (idx < big_set_count)
+    {
+        //CUDA Command Line Additional Options : -Xptxas - dlcm = ca(yazılan c kodunu ptxas(ptx assembly) koduna dönüştürüp gpu üzerinde çalıştıtır)
+        //    - dlcm-- > default load cache modifier
+        //    ca : cache all(tüm seviyelerde cache işlemini yap, yani L1 ve L2 üzerinde cacheleme yap)
+        //    cg : cache global(sadece global alanda cacheleme yap-- > global alan tüm SM'lerin gördüğü L2 cache)
+        //        : Unified cache L1 cache'i temsil eder, her ne kadar L1 cache'i "cg" ile kapatsak da garantisi yok, bir miktar kullanılabilir.
+        //        load işlemi : gpu memory alınandan kernel register alanına load yapma işlemi
+
+		//L1 cacche kullanımını "- dlcm = cg" ile kapatabiliriz, bu durumda L1 cache kullanılmaz, sadece L2 cache kullanılır. erişim yavaşlar
+        // Device Memory (RAM) - L2 Cache (Global Cache, Shared Memory, for every block) - L1 cache (Unified Cache) - Register File (for every thread)
+		int number = big_set_numbers[idx];
+
+		//here we could have used big_set_numbers[idx] += number; but the idea is to observe L1 cache usage by accessing tiny_set_numbers repeatedly
+
+        for(int i= 0; i < tiny_set_count; i++)
+        {
+            number += tiny_set_numbers[i];
+		}
+
+		big_set_numbers[idx] = number;
+    }
+}
+
+__global__ void gpu_lernel_use_L2_shared_memory(int* big_set_numbers, const int big_set_count, int* tiny_set_numbers, const int tiny_set_count)
+{
+	//as we called the kernel with shared memory size, we can use extern shared memory --> gpu_lernel_use_L2_shared_memory << < gridDim, blockDim, sharead_memor_size ...
+	extern __shared__ int shared_tiny_set_numbers[];
+    
+    //the other option to allocate here
+    //__shared__ int shared_tiny_set_numbers[32];
+
+	int tidx = threadIdx.x;
+
+	// *** if tiny_set_count should be smalled than blockDim.x in order to make sure that all threads inside the block can load the shared memory
+    if(tidx < tiny_set_count)
+    {
+        shared_tiny_set_numbers[tidx] = tiny_set_numbers[tidx];
+	}
+
+	//do not proceed until all threads inside the block have loaded the shared memory
+	//sync all threads in the block
+	__syncthreads();
+
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (idx < big_set_count)
+    {
+        //CUDA Command Line Additional Options : -Xptxas - dlcm = ca(yazılan c kodunu ptxas(ptx assembly) koduna dönüştürüp gpu üzerinde çalıştıtır)
+        //    - dlcm-- > default load cache modifier
+        //    ca : cache all(tüm seviyelerde cache işlemini yap, yani L1 ve L2 üzerinde cacheleme yap)
+        //    cg : cache global(sadece global alanda cacheleme yap-- > global alan tüm SM'lerin gördüğü L2 cache)
+        //        : Unified cache L1 cache'i temsil eder, her ne kadar L1 cache'i "cg" ile kapatsak da garantisi yok, bir miktar kullanılabilir.
+        //        load işlemi : gpu memory alınandan kernel register alanına load yapma işlemi
+
+        //L1 cacche kullanımını "- dlcm = cg" ile kapatabiliriz, bu durumda L1 cache kullanılmaz, sadece L2 cache kullanılır. erişim yavaşlar
+        // Device Memory (RAM) - L2 Cache (Global Cache, Shared Memory, for every block) - L1 cache (Unified Cache) - Register File (for every thread)
+        int number = big_set_numbers[idx];
+
+        //here we could have used big_set_numbers[idx] += number; but the idea is to observe L1 cache usage by accessing tiny_set_numbers repeatedly
+
+        for (int i = 0; i < tiny_set_count; i++)
+        {
+            number += shared_tiny_set_numbers[i];
+        }
+
+        big_set_numbers[idx] = number;
+    }
 }
 
 __global__ void basic_gpu_increment_kernel_1B(int* g_data)
@@ -116,7 +191,7 @@ __global__ void basic_gpu_increment_kernel_MB(int* g_data, int N)
 }
 
 
-//Use a grid - stride loop, so you can launch �enough blocks to keep the GPU busy� regardless of N
+//Use a grid - stride loop, so you can launch “enough blocks to keep the GPU busy” regardless of N
 __global__ void basic_gpu_increment_kernel_stride(int* g_data, int N)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -151,9 +226,110 @@ struct cpu_gpu_mem
 {
     void* cpu_p;
     void* gpu_p;
+    void* cpu_p_tiny;
+    void* gpu_p_tiny;
     size_t nc;
+    size_t nc_tiny;
 	cudaStream_t stream;
 };
+
+void executeKernelL1Cache()
+{
+    const int instance_count = 1;// INSTANCE_COUNT;
+    const int launches_per_instance = 1;
+
+	cpu_gpu_mem* cg = new cpu_gpu_mem();
+    cg->nc = static_cast<size_t>(32 * 1024) * 1024;//32M elements
+    cg->nc_tiny = static_cast<size_t>(32);//32 elements (warp size)
+
+    int number_count = static_cast<int>(cg->nc);
+    int number_count_tiny = static_cast<int>(cg->nc_tiny);
+
+//--------- allocate memory ------
+    cudaError_t stream_err = cudaStreamCreateWithFlags(&cg->stream, cudaStreamNonBlocking);
+    assert(stream_err == cudaSuccess);
+
+    //CPU allocation
+    cg->cpu_p = malloc(cg->nc * sizeof(int));
+	cg->cpu_p_tiny = malloc(cg->nc_tiny * sizeof(int));
+    assert(cg->cpu_p != nullptr);
+
+    //GPU allocation
+    cudaError_t err_allocation = cudaMalloc(&cg->gpu_p, cg->nc * sizeof(int));
+    assert(err_allocation == cudaSuccess);
+    cudaError_t err_allocation_tiny = cudaMalloc(&cg->gpu_p_tiny, cg->nc_tiny * sizeof(int));
+    assert(err_allocation_tiny == cudaSuccess);
+
+    //set numbers on CPU
+    int* int_p = (int*)cg->cpu_p;
+    int* int_p_tiny = (int*)cg->cpu_p_tiny;
+    for (size_t j = 0; j < cg->nc; j++)
+    {
+        int_p[j] = static_cast<int>(j + 1);
+    }
+    for (size_t j = 0; j < cg->nc_tiny; j++)
+    {
+        int_p_tiny[j] = static_cast<int>(j + 1);
+    }
+
+    //register CPU memory for GPU access
+    cudaError_t err_register = cudaHostRegister(cg->cpu_p, cg->nc * sizeof(int), 0);//cudaHostRegisterMapped is suggested
+    assert(err_register == cudaSuccess);
+
+//----------- execute GPU kernel ------------
+    //copy CPU memory to GPU memory
+    cudaError_t err_copy = cudaMemcpyAsync(cg->gpu_p, cg->cpu_p, cg->nc * sizeof(int), cudaMemcpyHostToDevice, cg->stream);
+    assert(err_copy == cudaSuccess);
+    cudaError_t err_copy_tiny = cudaMemcpyAsync(cg->gpu_p_tiny, cg->cpu_p_tiny, cg->nc_tiny * sizeof(int), cudaMemcpyHostToDevice, cg->stream);
+    assert(err_copy_tiny == cudaSuccess);
+
+    //launch kernel
+    int blockDim = 64;
+    int gridDim = (static_cast<int>(cg->nc) + blockDim - 1) / blockDim;
+
+    //launch multiple times per instance
+    for (int launch_idx = 1; launch_idx <= launches_per_instance; launch_idx++)
+    {
+        //gpu_lernel_use_L1_cache_heavily << < gridDim, blockDim, 0 cg->stream >> > ((int*)cg->gpu_p, number_count, (int*)cg->gpu_p_tiny, number_count_tiny);
+
+		int sharead_memor_size = number_count_tiny * sizeof(int);
+        gpu_lernel_use_L2_shared_memory << < gridDim, blockDim, sharead_memor_size, cg->stream >> > ((int*)cg->gpu_p, number_count, (int*)cg->gpu_p_tiny, number_count_tiny);
+    }
+
+    //copy GPU memory back to CPU memory
+    cudaError_t err_copy_back = cudaMemcpyAsync(cg->cpu_p, cg->gpu_p, cg->nc * sizeof(int), cudaMemcpyDeviceToHost, cg->stream);
+    assert(err_copy_back == cudaSuccess);
+    cudaError_t err_copy_back_tiny = cudaMemcpyAsync(cg->cpu_p_tiny, cg->gpu_p_tiny, cg->nc_tiny * sizeof(int), cudaMemcpyDeviceToHost, cg->stream);
+    assert(err_copy_back_tiny == cudaSuccess);
+
+//-------------- print CPU memory ----------------
+    cudaError_t error_sync = cudaDeviceSynchronize();
+    assert(error_sync == cudaSuccess);
+
+    print_cpu_numbers(int_p, cg->nc, false, false, 5, 5);
+    std::cout << std::endl << std::endl;
+
+//// cleanup LAST - unregister and free memory
+    //unregister CPU memory
+    cudaError_t err_unregister = cudaHostUnregister(cg->cpu_p);
+    assert(err_unregister == cudaSuccess);
+
+    //free GPU memory
+    cudaError_t err_free_gpu = cudaFree(cg->gpu_p);
+    assert(err_free_gpu == cudaSuccess);
+    cg->gpu_p = nullptr;
+    cudaError_t err_free_gpu_tiny = cudaFree(cg->gpu_p_tiny);
+    assert(err_free_gpu_tiny == cudaSuccess);
+    cg->gpu_p_tiny = nullptr;
+
+    //free CPU memory
+    free(cg->cpu_p);
+    cg->cpu_p = nullptr;
+    free(cg->cpu_p_tiny);
+    cg->cpu_p_tiny = nullptr;
+
+    std::cout << "L1 Cache Example Completed." << std::endl;
+}
 
 void executeGPUMultipleInstances()
 {
@@ -587,8 +763,8 @@ void executeGPU()
 //--------------------------- calculate occupancy ---------------------------
 
     size_t dynamicSmemBytes = 0;//dynamicSMemSize: per - block dynamic shared memory you intend to use(bytes)
-    size_t blockSizeLimit = 0;//blockSizeLimit : max block size your kernel is designed to work with; 0 means �no limit.�
-    //So 0, 0 means: �assume no dynamic shared memory� and �don�t cap the block size.� 
+    size_t blockSizeLimit = 0;//blockSizeLimit : max block size your kernel is designed to work with; 0 means “no limit.”
+    //So 0, 0 means: “assume no dynamic shared memory” and “don’t cap the block size.” 
 
     // These variables are used to convert occupancy to warps
     int device;

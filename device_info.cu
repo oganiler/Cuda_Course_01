@@ -51,8 +51,9 @@ void PrintCudaDeviceInfo()
         std::cout << "=== Device " << dev << " ===\n";
         std::cout << "Name: " << p.name << "\n";
         std::cout << "Compute Capability: " << p.major << "." << p.minor << "\n";
-        std::cout << "SM count (multiProcessorCount): " << p.multiProcessorCount << "\n";
         std::cout << "Warp size: " << p.warpSize << "\n";
+        std::cout << "SM count (multiProcessorCount): " << p.multiProcessorCount << "\n";
+        std::cout << "Max Block Per SM: " << p.maxBlocksPerMultiProcessor << "\n";
         std::cout << "Max threads per block: " << p.maxThreadsPerBlock << "\n";
         std::cout << "Max threads dim: [" << p.maxThreadsDim[0] << ", "
             << p.maxThreadsDim[1] << ", " << p.maxThreadsDim[2] << "]\n";
@@ -66,6 +67,7 @@ void PrintCudaDeviceInfo()
         std::cout << "Shared mem per block: " << p.sharedMemPerBlock / 1024 << " KiB\n";
         std::cout << "Regs per block: " << p.regsPerBlock << "\n";
         std::cout << "L2 cache size: " << p.l2CacheSize / 1024 << " KiB\n";
+      
 
         // Clocks are reported in kHz by cudaDeviceProp.
         //std::cout << "SM clock: " << (p.clockRate / 1000) << " MHz\n";
